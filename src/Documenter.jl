@@ -4,7 +4,8 @@ Main module for `Documenter.jl` -- a documentation generation package for Julia.
 Two functions are exported from this module for public use:
 
 - [`makedocs`](@ref). Generates documentation from docstrings and templated markdown files.
-- [`deploydocs`](@ref). Deploys generated documentation from *Travis-CI* to *GitHub Pages*.
+- [`deploydocs`](@ref). Deploys generated documentation from *Travis CI* or *Circle CI*
+  to *GitHub Pages*.
 
 # Exports
 
@@ -423,39 +424,46 @@ the generated html. The following entries are valied in the `versions` vector:
 # Environment variables
 
 [`deploydocs`](@ref)'s behavior is influenced by the following environment variables, many
-of which are specific to the [Travis CI platform](https://travis-ci.com/).
+of which are specific to CI platforms.
+`<service>` indicates the current platform, either `TRAVIS` for Travis CI or `CIRCLE` for
+Circle CI.
 
  - **`DOCUMENTER_KEY`**: must contain the Base64-encoded SSH private key for the repository.
 
- - **`TRAVIS_PULL_REQUEST`**: must be set to `false`.
+ - **`<service>_PULL_REQUEST`**: must be set to `false`.
 
    This avoids deployment on pull request builds. Note that there is no way to _safely_
    enable builds on pull requests, since that would expose the SSH private key
    (`DOCUMENTER_KEY`), giving anyone opening a pull request full write access to the repository.
 
- - **`TRAVIS_REPO_SLUG`**: must match the value of the `repo` keyword.
+ - **`<service>_REPO_SLUG`**: must match the value of the `repo` keyword. On Circle CI, this
+   variable does not exist, so instead, `\$CIRCLE_PROJECT_USERNAME/\$CIRCLE_PROJECT_REPONAME`
+   is used.
 
- - **`TRAVIS_EVENT_TYPE`**: may not be set to `cron`.
+ - **`<service>_EVENT_TYPE`**: may not be set to `cron`.
 
-   This avoids the re-deployment of existing docs on builds that were triggered by a Travis
-   cron job.
+   This avoids the re-deployment of existing docs on builds that were triggered by a CI
+   cron job. On Circle CI, this variable is never set. Note that for this reason, scheduled
+   jobs will deploy.
 
- - **`TRAVIS_BRANCH`**: unless `TRAVIS_TAG` is non-empty, this must have the same value as the
-   `devbranch` keyword.
+ - **`<service>_BRANCH`**: unless `<service>_TAG` is non-empty, this must have the same value
+   as the `devbranch` keyword.
 
    This makes sure that only the development branch (commonly, the `master` branch) will deploy
    the "dev" documentation (deployed into a directory specified by the `devurl` keyword).
 
- - **`TRAVIS_TAG`**: if set, a tagged version deployment is performed instead; the value must be
-   a valid version number (i.e. match `Base.VERSION_REGEX`).
+ - **`<service>_TAG`**: if set, a tagged version deployment is performed instead; the value
+   must be a valid version number (i.e. match `Base.VERSION_REGEX`).
 
    The documentation for a package version tag gets deployed to a directory named after the
-   version number in `TRAVIS_TAG` instead.
+   version number in `<service>_TAG` instead.
 
-The `TRAVIS_*` variables are set automatically on Travis, but could be set manually to
+The `<service>_*` variables are set automatically on the CI platform, but could be set manually to
 appropriate values as well to run [`deploydocs`](@ref) locally or on other CI platforms.
 More information on how Travis sets the `TRAVIS_*` variables can be found in the
-[Travis documentation](https://docs.travis-ci.com/user/environment-variables/#default-environment-variables).
+[Travis documentation](https://docs.travis-ci.com/user/environment-variables/#default-environment-variables),
+and Circle CI offers similar documentation
+[here](https://circleci.com/docs/2.0/env-vars/#built-in-environment-variables).
 
 # See Also
 
@@ -506,53 +514,67 @@ function deploydocs(;
     end
 
     # Get environment variables.
-    documenter_key      = get(ENV, "DOCUMENTER_KEY",       "")
-    travis_branch       = get(ENV, "TRAVIS_BRANCH",        "")
-    travis_pull_request = get(ENV, "TRAVIS_PULL_REQUEST",  "")
-    travis_repo_slug    = get(ENV, "TRAVIS_REPO_SLUG",     "")
-    travis_tag          = get(ENV, "TRAVIS_TAG",           "")
-    travis_event_type   = get(ENV, "TRAVIS_EVENT_TYPE",    "")
 
+    documenter_key      = get(ENV, "DOCUMENTER_KEY",       "")
+
+    service = if get(ENV, "TRAVIS", "") == "true"
+        "TRAVIS"
+    elseif get(ENV, "CIRCLECI", "") == "true"
+        "CIRCLE"
+    else
+        "(no-ci-service)"
+    end
+
+    ci_branch       = get(ENV, "$service_BRANCH",        "")
+    ci_tag          = get(ENV, "$service_TAG",           "")
+    ci_event_type   = get(ENV, "$service_EVENT_TYPE",    "")
+    ci_pull_request = get(ENV, "$service_PULL_REQUEST",  "false")
+
+    ci_repo_slug    = if service == "TRAVIS"
+        get(ENV, "TRAVIS_REPO_SLUG",     "")
+    elseif service == "CIRCLE"
+        get(ENV, "CIRCLE_PROJECT_USERNAME", "") * "/" * get(ENV, "CIRCLE_PROJECT_REPONAME", "")
+    else
+        ""
+    end
 
     # Other variables.
-    sha = cd(root) do
+    sha = try
         # We'll make sure we run the git commands in the source directory (root), in case
         # the working directory has been changed (e.g. if the makedocs' build argument is
         # outside root).
-        try
-            readchomp(`git rev-parse --short HEAD`)
-        catch
-            # git rev-parse will throw an error and return code 128 if it is not being
-            # run in a git repository, which will make run/readchomp throw an exception.
-            # We'll assume that if readchomp fails it is due to this and set the sha
-            # variable accordingly.
-            "(not-git-repo)"
-        end
+        readchomp(`git -C $root rev-parse --short HEAD`)
+    catch
+        # git rev-parse will throw an error and return code 128 if it is not being
+        # run in a git repository, which will make run/readchomp throw an exception.
+        # We'll assume that if readchomp fails it is due to this and set the sha
+        # variable accordingly.
+        "(not-git-repo)"
     end
 
     # Check criteria for deployment
-    ## The deploydocs' repo should match TRAVIS_REPO_SLUG
-    repo_ok = occursin(travis_repo_slug, repo)
+    ## The deploydocs' repo should match the repo slug
+    repo_ok = occursin(ci_repo_slug, repo)
     ## Do not deploy for PRs
-    pr_ok = travis_pull_request == "false"
+    pr_ok = ci_pull_request == "false"
     ## If a tag exist it should be a valid VersionNumber
-    tag_ok = isempty(travis_tag) || occursin(Base.VERSION_REGEX, travis_tag)
-    ## If no tag exists deploydocs' devbranch should match TRAVIS_BRANCH
-    branch_ok = !isempty(travis_tag) || travis_branch == devbranch
+    tag_ok = isempty(ci_tag) || occursin(Base.VERSION_REGEX, ci_tag)
+    ## If no tag exists deploydocs' devbranch should match CI branch
+    branch_ok = !isempty(ci_tag) || ci_branch == devbranch
     ## DOCUMENTER_KEY should exist
     key_ok = !isempty(documenter_key)
     ## Cron jobs should not deploy
-    type_ok = travis_event_type != "cron"
+    type_ok = ci_event_type != "cron"
     should_deploy = repo_ok && pr_ok && tag_ok && branch_ok && key_ok && type_ok
 
     marker(x) = x ? "✔" : "✘"
     @info """Deployment criteria:
-    - $(marker(repo_ok)) ENV["TRAVIS_REPO_SLUG"]="$(travis_repo_slug)" occurs in repo="$(repo)"
-    - $(marker(pr_ok)) ENV["TRAVIS_PULL_REQUEST"]="$(travis_pull_request)" is "false"
-    - $(marker(tag_ok)) ENV["TRAVIS_TAG"]="$(travis_tag)" is (i) empty or (ii) a valid VersionNumber
-    - $(marker(branch_ok)) ENV["TRAVIS_BRANCH"]="$(travis_branch)" matches devbranch="$(devbranch)" (if tag is empty)
+    - $(marker(repo_ok)) ENV["$service_REPO_SLUG"]="$(ci_repo_slug)" occurs in repo="$(repo)"
+    - $(marker(pr_ok)) ENV["$service_PULL_REQUEST"]="$(ci_pull_request)" is "false"
+    - $(marker(tag_ok)) ENV["$service_TAG"]="$(ci_tag)" is (i) empty or (ii) a valid VersionNumber
+    - $(marker(branch_ok)) ENV["$service_BRANCH"]="$(ci_branch)" matches devbranch="$(devbranch)" (if tag is empty)
     - $(marker(key_ok)) ENV["DOCUMENTER_KEY"] exists
-    - $(marker(type_ok)) ENV["TRAVIS_EVENT_TYPE"]="$(travis_event_type)" is not "cron"
+    - $(marker(type_ok)) ENV["$service_EVENT_TYPE"]="$(ci_event_type)" is not "cron"
     Deploying: $(marker(should_deploy))
     """
 
@@ -578,7 +600,7 @@ function deploydocs(;
                 git_push(
                     root, temp, repo;
                     branch=branch, dirname=dirname, target=target,
-                    tag=travis_tag, key=documenter_key, sha=sha,
+                    tag=ci_tag, key=documenter_key, sha=sha,
                     devurl = devurl, versions = versions, forcepush = forcepush,
                 )
             end
