@@ -525,10 +525,10 @@ function deploydocs(;
         "(no-ci-service)"
     end
 
-    ci_branch       = get(ENV, "$service_BRANCH",        "")
-    ci_tag          = get(ENV, "$service_TAG",           "")
-    ci_event_type   = get(ENV, "$service_EVENT_TYPE",    "")
-    ci_pull_request = get(ENV, "$service_PULL_REQUEST",  "false")
+    ci_branch       = get(ENV, "$(service)_BRANCH",        "")
+    ci_tag          = get(ENV, "$(service)_TAG",           "")
+    ci_event_type   = get(ENV, "$(service)_EVENT_TYPE",    "")
+    ci_pull_request = get(ENV, "$(service)_PULL_REQUEST",  "false")
 
     ci_repo_slug    = if service == "TRAVIS"
         get(ENV, "TRAVIS_REPO_SLUG",     "")
@@ -569,12 +569,12 @@ function deploydocs(;
 
     marker(x) = x ? "✔" : "✘"
     @info """Deployment criteria:
-    - $(marker(repo_ok)) ENV["$service_REPO_SLUG"]="$(ci_repo_slug)" occurs in repo="$(repo)"
-    - $(marker(pr_ok)) ENV["$service_PULL_REQUEST"]="$(ci_pull_request)" is "false"
-    - $(marker(tag_ok)) ENV["$service_TAG"]="$(ci_tag)" is (i) empty or (ii) a valid VersionNumber
-    - $(marker(branch_ok)) ENV["$service_BRANCH"]="$(ci_branch)" matches devbranch="$(devbranch)" (if tag is empty)
+    - $(marker(repo_ok)) ENV["$(service)_REPO_SLUG"]="$(ci_repo_slug)" occurs in repo="$(repo)"
+    - $(marker(pr_ok)) ENV["$(service)_PULL_REQUEST"]="$(ci_pull_request)" is "false"
+    - $(marker(tag_ok)) ENV["$(service)_TAG"]="$(ci_tag)" is (i) empty or (ii) a valid VersionNumber
+    - $(marker(branch_ok)) ENV["$(service)_BRANCH"]="$(ci_branch)" matches devbranch="$(devbranch)" (if tag is empty)
     - $(marker(key_ok)) ENV["DOCUMENTER_KEY"] exists
-    - $(marker(type_ok)) ENV["$service_EVENT_TYPE"]="$(ci_event_type)" is not "cron"
+    - $(marker(type_ok)) ENV["$(service)_EVENT_TYPE"]="$(ci_event_type)" is not "cron"
     Deploying: $(marker(should_deploy))
     """
 
